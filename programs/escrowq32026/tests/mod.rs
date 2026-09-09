@@ -103,7 +103,7 @@ fn test_make_and_refund() {
             deposit: 10_000_000,
             seed: 123u64,
             receive: 10_000_000,
-            expiration: 17780206209,
+            expiration: 0,
         }
         .data(),
     };
@@ -167,6 +167,121 @@ fn test_make_and_refund() {
     msg!("\n\nRefund transaction sucessful");
     msg!("CUs Consumed: {}", tx.compute_units_consumed);
     msg!("Tx Signature: {}", tx.signature);
+    assert!(program.get_account(&escrow).is_none());
+    assert!(program.get_account(&vault).is_none());
+}
+
+#[test]
+fn test_make_and_take() {
+    let (mut program, payer) = setup();
+
+    let maker = payer.pubkey();
+    let taker_keypair = Keypair::new();
+    program.airdrop(&taker_keypair.pubkey(), 1_000_000_000).unwrap();
+    let taker = taker_keypair.pubkey();
+
+    let mint_a = CreateMint::new(&mut program, &payer)
+        .decimals(6)
+        .authority(&maker)
+        .send()
+        .unwrap();
+    
+    let mint_b = CreateMint::new(&mut program, &payer)
+        .decimals(6)
+        .authority(&maker)
+        .send()
+        .unwrap();
+
+    let maker_ata_a = CreateAssociatedTokenAccount::new(&mut program, &payer, &mint_a)
+        .owner(&maker)
+        .send()
+        .unwrap();
+
+    let taker_ata_b = CreateAssociatedTokenAccount::new(&mut program, &taker_keypair, &mint_b)
+        .owner(&taker)
+        .send()
+        .unwrap();
+
+    let escrow = Pubkey::find_program_address(
+        &[b"escrow", maker.as_ref(), &456u64.to_le_bytes()],
+        &escrowq32026::id(),
+    )
+    .0;
+
+    let vault = associated_token::get_associated_token_address(&escrow, &mint_a);
+
+    MintTo::new(&mut program, &payer, &mint_a, &maker_ata_a, 10_000_000)
+        .send()
+        .unwrap();
+
+    MintTo::new(&mut program, &payer, &mint_b, &taker_ata_b, 10_000_000)
+        .send()
+        .unwrap();
+
+    let make_ix = Instruction {
+        program_id: escrowq32026::id(),
+        accounts: escrowq32026::accounts::Make {
+            maker: maker,
+            mint_a: mint_a,
+            mint_b: mint_b,
+            maker_ata_a: maker_ata_a,
+            escrow: escrow,
+            vault: vault,
+            associated_token_program: ASSOCIATED_TOKEN_PROGRAM_ID,
+            token_program: TOKEN_PROGRAM_ID,
+            system_program: SYSTEM_PROGRAM_ID,
+        }
+        .to_account_metas(None),
+        data: escrowq32026::instruction::Make {
+            deposit: 5_000_000,
+            seed: 456u64,
+            receive: 5_000_000,
+            expiration: i64::MAX, // Large expiration so it hasn't expired
+        }
+        .data(),
+    };
+
+    let message = Message::new(&[make_ix], Some(&payer.pubkey()));
+    let recent_blockhash = program.latest_blockhash();
+    let transaction = Transaction::new(&[&payer], message, recent_blockhash);
+    program.send_transaction(transaction).unwrap();
+
+    let taker_ata_a = associated_token::get_associated_token_address(&taker, &mint_a);
+    let maker_ata_b = associated_token::get_associated_token_address(&maker, &mint_b);
+
+    let take_ix = Instruction {
+        program_id: escrowq32026::id(),
+        accounts: escrowq32026::accounts::Take {
+            taker: taker,
+            maker: maker,
+            mint_a: mint_a,
+            mint_b: mint_b,
+            taker_ata_a: taker_ata_a,
+            taker_ata_b: taker_ata_b,
+            maker_ata_b: maker_ata_b,
+            escrow: escrow,
+            vault: vault,
+            associated_token_program: ASSOCIATED_TOKEN_PROGRAM_ID,
+            token_program: TOKEN_PROGRAM_ID,
+            system_program: SYSTEM_PROGRAM_ID,
+        }
+        .to_account_metas(None),
+        data: escrowq32026::instruction::Take {}.data(),
+    };
+
+    let message = Message::new(&[take_ix], Some(&taker));
+    let recent_blockhash = program.latest_blockhash();
+    let transaction = Transaction::new(&[&taker_keypair], message, recent_blockhash);
+    program.send_transaction(transaction).unwrap();
+
+    let maker_ata_b_account = program.get_account(&maker_ata_b).unwrap();
+    let maker_ata_b_data = spl_token::state::Account::unpack(&maker_ata_b_account.data).unwrap();
+    assert_eq!(maker_ata_b_data.amount, 5_000_000);
+
+    let taker_ata_a_account = program.get_account(&taker_ata_a).unwrap();
+    let taker_ata_a_data = spl_token::state::Account::unpack(&taker_ata_a_account.data).unwrap();
+    assert_eq!(taker_ata_a_data.amount, 5_000_000);
+
     assert!(program.get_account(&escrow).is_none());
     assert!(program.get_account(&vault).is_none());
 }

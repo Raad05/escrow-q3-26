@@ -62,7 +62,7 @@ impl<'info> Make<'info> {
             mint_b: self.mint_b.key(),
             receive: receive,
             bump: bumps.escrow,
-            expiration: expiration,
+            expiration,
         });
         Ok(())
     }

@@ -4,4 +4,6 @@ use anchor_lang::prelude::*;
 pub enum ErrorCode {
     #[msg("The escrow has expired")]
     EscrowExpired,
+    #[msg("The escrow has not expired yet")]
+    EscrowNotExpired,
 }
